@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+chroma_db/
+.DS_Store
+*.log
+.gradio/

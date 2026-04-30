@@ -1,0 +1,30 @@
+#!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RESOURCES="$SCRIPT_DIR/../Resources"
+
+if [ -f "$RESOURCES/resume.py" ]; then
+    APP_DIR="$RESOURCES"
+else
+    APP_DIR="$(cd "$SCRIPT_DIR/../../../src" && pwd)"
+fi
+cd "$APP_DIR"
+
+if ! command -v ollama &> /dev/null; then
+    osascript -e 'display dialog "Ollama is not installed.\n\nDownload it from https://ollama.com, then try again." with title "Resume Tailor" buttons {"OK"} default button "OK" with icon stop'
+    exit 1
+fi
+
+if ! command -v python3 &> /dev/null; then
+    osascript -e 'display dialog "Python 3 is not installed.\n\nDownload it from https://python.org, then try again." with title "Resume Tailor" buttons {"OK"} default button "OK" with icon stop'
+    exit 1
+fi
+
+PIP_OUTPUT=$(pip3 install -q -r requirements.txt 2>&1)
+if [ $? -ne 0 ]; then
+    osascript -e "display dialog \"Failed to install dependencies:\n\n$PIP_OUTPUT\" with title \"Resume Tailor\" buttons {\"OK\"} default button \"OK\" with icon stop"
+    exit 1
+fi
+
+arch -arm64 python3 resume.py

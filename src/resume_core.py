@@ -4,7 +4,6 @@ from pathlib import Path
 import ollama
 from langchain_community.document_loaders import PyMuPDFLoader
 
-RESUME_MODEL = "deepseek-r1:7b"
 SECTION_HEADERS = [
     "PROFESSIONAL SUMMARY",
     "SKILLS",
@@ -229,17 +228,16 @@ def choose_resume_output(resume_text, candidate_outputs):
     return resume_text
 
 
-def generate_resume(messages):
-    response = ollama.chat(
-        model=RESUME_MODEL,
-        messages=messages,
-    )
+def strip_think_streaming(text):
+    # Remove complete think blocks
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # Show placeholder while still inside an incomplete think block
+    if "<think>" in text:
+        return "Thinking..."
+    return text.strip()
 
-    response_content = response.message.content
-    return re.sub(r"<think>.*?</think>", "", response_content, flags=re.DOTALL).strip()
 
-
-def ollama_llm(resume_text, job_description):
+def build_messages(resume_text, job_description):
     system_prompt = (
         "You are a resume editor.\n"
         "- Output only the resume text.\n"
@@ -260,15 +258,68 @@ def ollama_llm(resume_text, job_description):
         f"Resume:\n<<<RESUME>>>\n{resume_text}\n<<<END RESUME>>>\n\n"
         f"Job Description:\n<<<JOB DESCRIPTION>>>\n{job_description}\n<<<END JOB DESCRIPTION>>>"
     )
-    messages = [
+    return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
 
-    final_answer = generate_resume(messages)
-    errors = validate_resume_output(resume_text, final_answer)
 
-    candidates = [(final_answer, errors)]
+def generate_resume(messages, model):
+    try:
+        response = ollama.chat(model=model, messages=messages)
+    except ollama.ResponseError:
+        raise ValueError(
+            f"'{model}' does not support text generation. Please select a different model."
+        )
+
+    response_content = response.message.content
+    return re.sub(r"<think>.*?</think>", "", response_content, flags=re.DOTALL).strip()
+
+
+def tailor_resume(pdf_source, model, job_description, stop_event=None):
+    resume_text = process_pdf(pdf_source)
+    if resume_text is None:
+        return
+
+    messages = build_messages(resume_text, job_description)
+
+    # Stream first attempt so the user sees live output and can stop if needed
+    raw = ""
+    try:
+        stream = ollama.chat(model=model, messages=messages, stream=True)
+    except ollama.ResponseError:
+        raise ValueError(
+            f"'{model}' does not support text generation. Please select a different model."
+        )
+
+    streaming_done = False
+    stream_error = None
+    try:
+        for chunk in stream:
+            if stop_event and stop_event.is_set():
+                break
+            raw += chunk.message.content or ""
+            yield strip_think_streaming(raw)
+        else:
+            streaming_done = True
+    except GeneratorExit:
+        pass
+    except Exception as e:
+        stream_error = e
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    if not streaming_done:
+        if stream_error:
+            yield f"Generation failed: {stream_error}\n\nOllama may still be loading the model. Wait a moment and try again."
+        return
+
+    first_answer = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    errors = validate_resume_output(resume_text, first_answer)
+    candidates = [(first_answer, errors)]
 
     if errors:
         retry_messages = messages + [
@@ -281,17 +332,11 @@ def ollama_llm(resume_text, job_description):
                 ),
             }
         ]
-        retry_answer = generate_resume(retry_messages)
-        retry_errors = validate_resume_output(resume_text, retry_answer)
-        candidates.append((retry_answer, retry_errors))
+        try:
+            retry_answer = generate_resume(retry_messages, model)
+            retry_errors = validate_resume_output(resume_text, retry_answer)
+            candidates.append((retry_answer, retry_errors))
+        except ValueError:
+            pass
 
-    return choose_resume_output(resume_text, candidates)
-
-
-def tailor_resume(pdf_source, job_description):
-    resume_text = process_pdf(pdf_source)
-
-    if resume_text is None:
-        return None
-
-    return ollama_llm(resume_text, job_description)
+    yield choose_resume_output(resume_text, candidates)
