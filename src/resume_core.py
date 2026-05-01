@@ -19,6 +19,28 @@ MARKDOWN_PATTERNS = [
     r"^\s*---\s*$",
     r"```",
 ]
+INDUSTRIES = [
+    "Technology/Software",
+    "Healthcare/Medical",
+    "Finance/Banking",
+    "Education",
+    "Marketing/Advertising",
+    "Engineering",
+    "Sales/Business Development",
+    "Consulting",
+    "Legal",
+    "Manufacturing",
+    "Retail/E-commerce",
+    "Nonprofit/Government",
+    "Media/Entertainment",
+    "Real Estate",
+    "Human Resources",
+    "Cybersecurity",
+    "Data/Analytics",
+    "Research/Academia",
+    "Logistics/Supply Chain",
+    "Architecture/Design",
+]
 
 
 def resolve_pdf_source(pdf_source):
@@ -237,7 +259,7 @@ def strip_think_streaming(text):
     return text.strip()
 
 
-def build_messages(resume_text, job_description):
+def build_messages(resume_text, job_description, title=None, industry=None, specifications=None):
     system_prompt = (
         "You are a resume editor.\n"
         "- Output only the resume text.\n"
@@ -258,6 +280,75 @@ def build_messages(resume_text, job_description):
         f"Resume:\n<<<RESUME>>>\n{resume_text}\n<<<END RESUME>>>\n\n"
         f"Job Description:\n<<<JOB DESCRIPTION>>>\n{job_description}\n<<<END JOB DESCRIPTION>>>"
     )
+
+    extras = []
+    if title and title.strip():
+        extras.append(f"Target Job Title: {title.strip()}")
+    if industry and industry.strip():
+        extras.append(f"Target Industry: {industry.strip()}")
+    if specifications and specifications.strip():
+        extras.append(f"Additional Preferences: {specifications.strip()}")
+    if extras:
+        user_prompt += "\n\n" + "\n".join(extras)
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_refine_messages(resume_text, prior_output, refinements):
+    system_prompt = (
+        "You are a resume editor.\n"
+        "- Output only the resume text.\n"
+        "- Use only facts from the source resume.\n"
+        "- Keep section names, section order, URLs, and contact details exactly as written.\n"
+        "- Do not expand abbreviations, initials, acronyms, or short organization names.\n"
+        "- Keep the same plain-text format. Do not use markdown, code fences, bullets, or commentary.\n"
+        "- Do not add, remove, rename, merge, or invent entries.\n"
+        "- Apply only the requested refinements; preserve everything else exactly."
+    )
+    user_prompt = (
+        "Apply the requested refinements to the current tailored resume below. "
+        "Do not invent, correct, complete, or drop any information. "
+        "Return the resume in the same plain-text structure and section order. "
+        "Keep URLs exactly as written. Keep each entry on its own line.\n\n"
+        f"Source Resume (validation reference):\n<<<RESUME>>>\n{resume_text}\n<<<END RESUME>>>\n\n"
+        f"Current Tailored Resume:\n<<<CURRENT>>>\n{prior_output}\n<<<END CURRENT>>>\n\n"
+        f"Requested Refinements:\n<<<REFINEMENTS>>>\n{refinements}\n<<<END REFINEMENTS>>>"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_ask_messages(prior_output, question):
+    system_prompt = (
+        "You are a resume consultant. "
+        "Answer the user's question about the resume clearly and concisely. "
+        "Do not rewrite the full resume unless specifically asked."
+    )
+    user_prompt = (
+        f"Resume:\n<<<RESUME>>>\n{prior_output}\n<<<END RESUME>>>\n\n"
+        f"Question: {question}"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def build_summary_messages(source_resume, tailored_resume, context_note=""):
+    system_prompt = "You are a resume consultant. Be concise and specific."
+    request = "Compare the original and tailored resumes below and list 3-5 key changes made. Focus on what changed, not what stayed the same."
+    if context_note:
+        request = f"{context_note}\n\n{request}"
+    user_prompt = (
+        f"{request}\n\n"
+        f"Original:\n<<<ORIGINAL>>>\n{source_resume}\n<<<END ORIGINAL>>>\n\n"
+        f"Tailored:\n<<<TAILORED>>>\n{tailored_resume}\n<<<END TAILORED>>>"
+    )
     return [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
@@ -276,7 +367,40 @@ def generate_resume(messages, model):
     return re.sub(r"<think>.*?</think>", "", response_content, flags=re.DOTALL).strip()
 
 
-def tailor_resume(pdf_source, model, job_description, stop_event=None):
+def _stream_ollama(model, messages, stop_event):
+    """Stream Ollama chat, yielding text chunks. Raises ValueError on model error."""
+    try:
+        stream = ollama.chat(model=model, messages=messages, stream=True)
+    except ollama.ResponseError:
+        raise ValueError(f"'{model}' does not support text generation. Please select a different model.")
+
+    raw = ""
+    streaming_done = False
+    stream_error = None
+    try:
+        for chunk in stream:
+            if stop_event and stop_event.is_set():
+                break
+            raw += (chunk.message.content if chunk.message else "") or ""
+            yield strip_think_streaming(raw)
+        else:
+            streaming_done = True
+    except GeneratorExit:
+        pass
+    except Exception as e:
+        stream_error = e
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    if not streaming_done:
+        if stream_error:
+            raise RuntimeError(f"Generation failed: {stream_error}")
+
+
+def tailor_resume(pdf_source, model, job_description, stop_event=None, title=None, industry=None, specifications=None):
     try:
         resume_text = process_pdf(pdf_source)
     except ValueError as e:
@@ -286,9 +410,8 @@ def tailor_resume(pdf_source, model, job_description, stop_event=None):
         yield "No resume provided. Please upload a PDF file."
         return
 
-    messages = build_messages(resume_text, job_description)
+    messages = build_messages(resume_text, job_description, title=title, industry=industry, specifications=specifications)
 
-    # Stream first attempt so the user sees live output and can stop if needed
     raw = ""
     try:
         stream = ollama.chat(model=model, messages=messages, stream=True)
@@ -347,3 +470,138 @@ def tailor_resume(pdf_source, model, job_description, stop_event=None):
             pass
 
     yield choose_resume_output(resume_text, candidates)
+
+
+def refine_resume(pdf_source, model, prior_output, refinements, stop_event=None):
+    if not prior_output or not prior_output.strip():
+        yield "No resume output to refine. Run Improve mode first, then switch to Refine."
+        return
+    if not refinements or not refinements.strip():
+        yield "Please enter refinement instructions before submitting."
+        return
+
+    try:
+        resume_text = process_pdf(pdf_source)
+    except ValueError as e:
+        yield f"Could not read resume: {e}"
+        return
+    if resume_text is None:
+        yield "No resume provided. Please upload a PDF file."
+        return
+
+    messages = build_refine_messages(resume_text, prior_output, refinements)
+
+    raw = ""
+    try:
+        stream = ollama.chat(model=model, messages=messages, stream=True)
+    except ollama.ResponseError:
+        yield f"'{model}' does not support text generation. Please select a different model."
+        return
+    except Exception as e:
+        yield f"Could not connect to Ollama: {e}\n\nMake sure Ollama is running and try again."
+        return
+
+    streaming_done = False
+    stream_error = None
+    try:
+        for chunk in stream:
+            if stop_event and stop_event.is_set():
+                break
+            raw += (chunk.message.content if chunk.message else "") or ""
+            yield strip_think_streaming(raw)
+        else:
+            streaming_done = True
+    except GeneratorExit:
+        pass
+    except Exception as e:
+        stream_error = e
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    if not streaming_done:
+        if stream_error:
+            yield f"Generation failed: {stream_error}\n\nOllama may still be loading the model. Wait a moment and try again."
+        return
+
+    yield re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+
+def ask_about_resume(model, prior_output, question, stop_event=None):
+    if not prior_output or not prior_output.strip():
+        yield "No resume output to ask about. Run Improve mode first, then switch to Ask."
+        return
+    if not question or not question.strip():
+        yield "Please enter a question before submitting."
+        return
+
+    messages = build_ask_messages(prior_output, question)
+
+    raw = ""
+    try:
+        stream = ollama.chat(model=model, messages=messages, stream=True)
+    except ollama.ResponseError:
+        yield f"'{model}' does not support text generation. Please select a different model."
+        return
+    except Exception as e:
+        yield f"Could not connect to Ollama: {e}\n\nMake sure Ollama is running and try again."
+        return
+
+    streaming_done = False
+    stream_error = None
+    try:
+        for chunk in stream:
+            if stop_event and stop_event.is_set():
+                break
+            raw += (chunk.message.content if chunk.message else "") or ""
+            yield strip_think_streaming(raw)
+        else:
+            streaming_done = True
+    except GeneratorExit:
+        pass
+    except Exception as e:
+        stream_error = e
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    if not streaming_done:
+        if stream_error:
+            yield f"Generation failed: {stream_error}"
+        return
+
+    yield re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+
+def summarize_changes(model, source_resume, tailored_resume, context_note=""):
+    if not source_resume or not source_resume.strip():
+        messages = build_summary_messages("(not available)", tailored_resume, context_note)
+    else:
+        messages = build_summary_messages(source_resume, tailored_resume, context_note)
+
+    raw = ""
+    try:
+        stream = ollama.chat(model=model, messages=messages, stream=True)
+    except Exception:
+        yield "Could not generate analysis."
+        return
+
+    try:
+        for chunk in stream:
+            raw += (chunk.message.content if chunk.message else "") or ""
+            yield strip_think_streaming(raw)
+    except Exception:
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    final = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    if final:
+        yield final
