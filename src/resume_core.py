@@ -277,8 +277,13 @@ def generate_resume(messages, model):
 
 
 def tailor_resume(pdf_source, model, job_description, stop_event=None):
-    resume_text = process_pdf(pdf_source)
+    try:
+        resume_text = process_pdf(pdf_source)
+    except ValueError as e:
+        yield f"Could not read resume: {e}"
+        return
     if resume_text is None:
+        yield "No resume provided. Please upload a PDF file."
         return
 
     messages = build_messages(resume_text, job_description)
@@ -288,9 +293,11 @@ def tailor_resume(pdf_source, model, job_description, stop_event=None):
     try:
         stream = ollama.chat(model=model, messages=messages, stream=True)
     except ollama.ResponseError:
-        raise ValueError(
-            f"'{model}' does not support text generation. Please select a different model."
-        )
+        yield f"'{model}' does not support text generation. Please select a different model."
+        return
+    except Exception as e:
+        yield f"Could not connect to Ollama: {e}\n\nMake sure Ollama is running and try again."
+        return
 
     streaming_done = False
     stream_error = None
@@ -298,7 +305,7 @@ def tailor_resume(pdf_source, model, job_description, stop_event=None):
         for chunk in stream:
             if stop_event and stop_event.is_set():
                 break
-            raw += chunk.message.content or ""
+            raw += (chunk.message.content if chunk.message else "") or ""
             yield strip_think_streaming(raw)
         else:
             streaming_done = True
