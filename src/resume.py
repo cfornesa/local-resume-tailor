@@ -11,6 +11,9 @@ from resume_core import (
     refine_resume,
     ask_about_resume,
     summarize_changes,
+    improve_ats_resume,
+    analyze_keyword_coverage,
+    format_ats_report,
     INDUSTRIES,
 )
 
@@ -80,14 +83,22 @@ def run_tailor(mode, pdf_source, model, prior_resume, title, industry, job_descr
         final_resume = last_chunk
         yield final_resume, "Analyzing changes...", final_resume
 
+        final_insights = ""
         for chunk in summarize_changes(model, prior_resume or "", final_resume):
             if _stop_event.is_set():
                 break
+            final_insights = chunk
             yield gr.update(), chunk, gr.update()
+
+        if job_description and job_description.strip() and not _stop_event.is_set():
+            found, missing = analyze_keyword_coverage(job_description, final_resume)
+            report = format_ats_report(found, missing, final_resume)
+            if report:
+                yield gr.update(), final_insights + "\n\n" + report, gr.update()
 
     elif mode == "Refine":
         last_chunk = ""
-        for chunk in refine_resume(pdf_source, model, prior_resume, user_input, _stop_event):
+        for chunk in refine_resume(pdf_source, model, prior_resume, user_input, _stop_event, job_description=job_description):
             last_chunk = chunk
             yield chunk, gr.update(), gr.update()
 
@@ -98,10 +109,18 @@ def run_tailor(mode, pdf_source, model, prior_resume, title, industry, job_descr
         context = f"The user requested: {user_input}" if user_input and user_input.strip() else ""
         yield final_resume, "Analyzing refinements...", final_resume
 
+        final_insights = ""
         for chunk in summarize_changes(model, prior_resume or "", final_resume, context_note=context):
             if _stop_event.is_set():
                 break
+            final_insights = chunk
             yield gr.update(), chunk, gr.update()
+
+        if job_description and job_description.strip() and not _stop_event.is_set():
+            found, missing = analyze_keyword_coverage(job_description, final_resume)
+            report = format_ats_report(found, missing, final_resume)
+            if report:
+                yield gr.update(), final_insights + "\n\n" + report, gr.update()
 
     else:  # Ask
         for chunk in ask_about_resume(model, prior_resume, user_input, _stop_event):
@@ -120,7 +139,7 @@ def refresh_resume_fn(mode, pdf_source, model, prior_resume, title, industry, jo
             title=title, industry=industry, specifications=user_input,
         )
         if mode == "Improve"
-        else refine_resume(pdf_source, model, prior_resume, user_input, _stop_event)
+        else refine_resume(pdf_source, model, prior_resume, user_input, _stop_event, job_description=job_description)
     )
     last_chunk = ""
     for chunk in gen:
@@ -134,13 +153,21 @@ def refresh_resume_fn(mode, pdf_source, model, prior_resume, title, industry, jo
     context = f"The user requested: {user_input}" if mode == "Refine" and user_input and user_input.strip() else ""
     yield final_resume, "Analyzing changes...", final_resume
 
+    final_insights = ""
     for chunk in summarize_changes(model, prior_resume or "", final_resume, context_note=context):
         if _stop_event.is_set():
             break
+        final_insights = chunk
         yield gr.update(), chunk, gr.update()
 
+    if job_description and job_description.strip() and not _stop_event.is_set():
+        found, missing = analyze_keyword_coverage(job_description, final_resume)
+        report = format_ats_report(found, missing, final_resume)
+        if report:
+            yield gr.update(), final_insights + "\n\n" + report, gr.update()
 
-def refresh_insights_fn(mode, model, resume_state, user_input):
+
+def refresh_insights_fn(mode, model, resume_state, user_input, job_description):
     _stop_event.clear()
     if mode == "Ask":
         for chunk in ask_about_resume(model, resume_state, user_input, _stop_event):
@@ -150,10 +177,42 @@ def refresh_insights_fn(mode, model, resume_state, user_input):
             yield "No resume generated yet. Run Submit first."
             return
         context = f"The user requested: {user_input}" if mode == "Refine" and user_input and user_input.strip() else ""
+        final_insights = ""
         for chunk in summarize_changes(model, "", resume_state, context_note=context):
             if _stop_event.is_set():
                 break
+            final_insights = chunk
             yield chunk
+        if job_description and job_description.strip() and not _stop_event.is_set():
+            found, missing = analyze_keyword_coverage(job_description, resume_state)
+            report = format_ats_report(found, missing, resume_state)
+            if report:
+                yield final_insights + "\n\n" + report
+
+
+def improve_ats_fn(pdf_source, model, resume_state, job_description):
+    _stop_event.clear()
+    yield gr.update(), "Integrating ATS keywords...", gr.update()
+
+    last_chunk = ""
+    for chunk in improve_ats_resume(pdf_source, model, resume_state, job_description, _stop_event):
+        last_chunk = chunk
+
+    if _stop_event.is_set() or not last_chunk:
+        yield resume_state or gr.update(), "Generation stopped. Resume unchanged.", gr.update()
+        return
+
+    final_resume = last_chunk
+    if final_resume.strip() == (resume_state or "").strip():
+        found, missing = analyze_keyword_coverage(job_description, final_resume)
+        report = format_ats_report(found, missing, final_resume)
+        note = "⚠ No supported ATS improvement was accepted — the resume is unchanged. Try Refine with specific keyword instructions.\n\n"
+        yield final_resume, note + (report or ""), final_resume
+        return
+
+    found, missing = analyze_keyword_coverage(job_description, final_resume)
+    report = format_ats_report(found, missing, final_resume)
+    yield final_resume, report or "ATS analysis complete.", final_resume
 
 
 with gr.Blocks(title="Resume Tailor") as interface:
@@ -208,6 +267,7 @@ with gr.Blocks(title="Resume Tailor") as interface:
         gr.Markdown("### Resume Output")
         copy_resume_btn = gr.Button("⧉ Copy", size="sm", variant="secondary")
         refresh_resume_btn = gr.Button("↺ Refresh Resume", size="sm", variant="secondary")
+        improve_ats_btn = gr.Button("↑ Improve ATS", size="sm", variant="secondary")
 
     resume_output = gr.Textbox(
         label=None,
@@ -250,8 +310,14 @@ with gr.Blocks(title="Resume Tailor") as interface:
 
     refresh_insights_btn.click(
         fn=refresh_insights_fn,
-        inputs=[mode_input, model_input, resume_state, user_input],
+        inputs=[mode_input, model_input, resume_state, user_input, job_input],
         outputs=[insights_output],
+    )
+
+    improve_ats_btn.click(
+        fn=improve_ats_fn,
+        inputs=[pdf_input, model_input, resume_state, job_input],
+        outputs=[resume_output, insights_output, resume_state],
     )
 
     copy_resume_btn.click(

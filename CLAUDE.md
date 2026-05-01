@@ -17,12 +17,16 @@ Before making any change to this codebase, read the following files in order:
 - The layout order is: inputs → Submit/Stop → outputs. Do not place output fields above input fields.
 - Mode switching must not clear any field except the Specifications/Refinements/Question field.
 - Title, Industry, and Job Description rows must be hidden (not just empty) in Refine and Ask modes.
+- ATS keyword analysis and ATS report formatting are deterministic Python. Do not replace them with LLM calls.
+- Improve ATS is Python-first: run deterministic line-local ATS rewrites before the LLM fallback, and never accept unchanged, regressed, section-broken, or keyword-dump output.
+- Do not inject explicit keyword lists into initial Improve mode prompts. Weak local models tend to dump keyword lists.
 
 ## File map
 
 ```
 src/resume.py        — Gradio UI, layout, event wiring, mode dispatch
-src/resume_core.py   — PDF extraction, prompt builders, streaming generators, validation
+src/resume_core.py   — PDF extraction, prompt builders, streaming generators, validation,
+                       deterministic ATS keyword analysis and ATS improvement
 ```
 
 All business logic lives in `resume_core.py`. All Gradio components and event handlers live in `resume.py`. Keep this separation.

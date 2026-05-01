@@ -27,7 +27,7 @@ Specifications / Refinements / Question
 ──────────────
 Submit | Stop
 ──────────────
-Resume Output      [⧉ Copy] [↺ Refresh Resume]
+Resume Output      [⧉ Copy] [↺ Refresh Resume] [↑ Improve ATS]
 Insights & Answers [⧉ Copy] [↺ Refresh Insights]
 ```
 
@@ -49,10 +49,12 @@ Title, Industry, and Job Description are only visible in Improve mode. They coll
 
 ## Two-phase streaming with visible progress
 
-In Improve and Refine modes, generation happens in two sequential phases:
+In Improve and Refine modes, generation happens in two sequential phases, with deterministic ATS work around them:
 
 1. **Resume phase** — the model streams the tailored resume into Resume Output. The user can read it, scroll it, and click Stop at any point.
-2. **Analysis phase** — once the resume is finalised, "Analyzing changes..." appears in the Insights field, then the model streams a bullet-point summary of what changed.
+2. **Validation + ATS rewrite** — Improve mode validates the model output, chooses the best candidate, then may apply a conservative Python ATS rewrite if it improves keyword coverage and still passes validation.
+3. **Analysis phase** — once the resume is finalised, "Analyzing changes..." appears in the Insights field, then the model streams a bullet-point summary of what changed.
+4. **ATS report** — immediately after the LLM summary finishes, a deterministic `ATS Compatibility Report` is appended to Insights. This composite report covers three dimensions computed directly from the output text: formatting (markdown/HTML detection), structure (which standard ATS section headers are present), and keyword coverage (job description terms found vs. missing). It is instant (no generation), identical on every run for the same inputs, and unaffected by model quality.
 
 The user always sees the resume before the analysis. The analysis is informed by the final resume, not a draft.
 
@@ -88,6 +90,7 @@ Resume Output and Insights & Answers can each be refreshed independently:
 
 - **↺ Refresh Resume** — re-runs the full resume generation (and then the analysis, since analysis must follow the resume).
 - **↺ Refresh Insights** — re-runs only the analysis/summary or re-answers the question, without touching the resume.
+- **↑ Improve ATS** — first runs a deterministic Python rewrite to integrate supported missing job-description keywords into existing resume lines. It falls back to a guarded LLM pass only when deterministic edits cannot improve coverage. It then updates Insights with a fresh ATS Compatibility Report and skips `summarize_changes`. It no-ops if all keywords are already covered or no safe improvement is accepted.
 
 This allows the user to get a new summary without waiting for another full resume generation.
 

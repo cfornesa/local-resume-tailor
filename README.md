@@ -10,6 +10,8 @@ Runs as a native desktop window. All inference happens on your machine — your 
 - Sends the resume and job description to whichever Ollama model you select
 - Validates the output against the source to catch hallucinations or structural changes
 - Retries once if validation errors are found, then returns the best candidate
+- Applies conservative Python-based ATS keyword improvements when they can be made without breaking validation
+- Appends a deterministic ATS Compatibility Report covering format, structure, and keyword coverage
 - Returns a plain-text tailored resume
 
 ## Prerequisites
@@ -50,6 +52,9 @@ On first launch (both platforms), Python dependencies are installed automaticall
    - Reasoning models (e.g. DeepSeek R1, Gemma) will show **Thinking...** while reasoning before the resume text begins streaming
 5. Click **Stop** at any time to cancel generation cleanly
    - After streaming ends, the app silently validates and optionally retries the output. The output border may pulse for up to a minute during this phase — this is normal.
+6. Review the ATS Compatibility Report in **Insights & Answers**
+   - The report is computed locally in Python from the final resume and job description
+   - Use **↑ Improve ATS** to run a Python-first keyword integration pass on the current resume; the model is used only as a fallback if deterministic edits cannot improve coverage
 
 See [EXAMPLE.md](EXAMPLE.md) for sample input and output.
 
@@ -70,7 +75,7 @@ Resume Tailor.vbs              ← Windows launcher — double-click to run on W
 build_dmg.sh                   ← Builds Resume Tailor.dmg from the app bundle + src/
 src/
 ├── resume.py                  ← Gradio UI (model selector, file upload, streaming output)
-├── resume_core.py             ← Core logic (PDF extraction, prompting, validation, retry)
+├── resume_core.py             ← Core logic (PDF extraction, prompting, validation, ATS analysis/improvement)
 ├── requirements.txt           ← Python dependencies
 └── image.png                  ← Favicon shown in the Gradio web UI tab
 ```
@@ -111,6 +116,12 @@ Errors are classified as critical (missing headers, changed contact info, missin
 ### Retry and candidate selection
 
 If any validation errors are found, the app makes one non-streaming retry call, appending the error list to the conversation so the model can self-correct. Both the first answer and the retry answer are kept as candidates. The candidate with the fewest critical errors (and then fewest total errors) is returned. If both candidates have critical errors, the original source resume text is returned unchanged.
+
+### ATS keyword handling
+
+ATS analysis is deterministic Python, not an LLM judgment. `extract_jd_keywords` filters the job description, `analyze_keyword_coverage` checks which terms appear in the resume, and `format_ats_report` appends the final report to Insights.
+
+After a valid Improve-mode resume is selected, the app tries a conservative deterministic ATS rewrite. This rewrite only changes safe existing lines, revalidates the result, and accepts it only if keyword coverage improves. The **↑ Improve ATS** button uses the same Python-first strategy on the current resume state. If Python cannot safely improve the resume, the app falls back to a tightly constrained model pass and still rejects keyword dumps, section loss, unchanged output, or any result that fails to improve keyword count.
 
 ### Think-block filtering
 
