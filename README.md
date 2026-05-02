@@ -31,13 +31,13 @@ Runs as a native desktop window. All inference happens on your machine — your 
 
 ### Windows
 
-A native installer built with [Inno Setup](https://jrsoftware.org/isinfo.php) is planned. Until then:
+1. Download `Resume Tailor.exe` from this repository
+2. Run the installer — it will warn you if Ollama or Python is missing before proceeding
+3. Click the **Resume Tailor** shortcut on your Desktop
 
-1. Clone or download this repository
-2. Ensure Ollama and Python 3 are installed
-3. Double-click `Resume Tailor.vbs`
+> On first launch a small "Installing dependencies…" window will appear briefly while Python packages are installed. This is expected. The app window will open automatically once it closes.
 
-See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for the full installer roadmap.
+See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for build instructions and troubleshooting.
 
 ---
 
@@ -71,7 +71,8 @@ Resume Tailor.app/             ← macOS app bundle (used by build_dmg.sh to pro
 │   │   └── Resume Tailor      ← Shell script: checks deps, pip-installs, launches resume.py
 │   └── Resources/
 │       └── AppIcon.icns       ← macOS app icon
-Resume Tailor.vbs              ← Windows launcher — double-click to run on Windows
+Resume Tailor.vbs              ← Windows launcher — checks Ollama/Python, pip-installs, launches resume.py
+build_exe.iss                  ← Inno Setup script — compiles into Resume Tailor.exe
 build_dmg.sh                   ← Builds Resume Tailor.dmg from the app bundle + src/
 src/
 ├── resume.py                  ← Gradio UI (model selector, file upload, streaming output)

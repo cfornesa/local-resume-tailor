@@ -157,6 +157,38 @@ Merging these into one field would require the user to communicate intent implic
 
 ---
 
+## Windows shortcut explicitly invokes wscript.exe, not the .vbs directly
+
+**Decision:** The Inno Setup `[Icons]` entry sets `Filename: "{sys}\wscript.exe"` with `Parameters: """{app}\Resume Tailor.vbs"""` rather than setting `Filename: "{app}\Resume Tailor.vbs"` directly.
+
+**Rationale:** A shortcut that targets a `.vbs` file relies on the Windows file association for `.vbs` → `wscript.exe`. On some systems this association is blocked by policy or corrupted registry state, causing the shortcut to silently do nothing even though the script itself is valid. Running `cscript Resume Tailor.vbs` from a terminal works in the same environment because `cscript.exe` is invoked explicitly, bypassing the file association entirely. The fix mirrors that — the shortcut calls `wscript.exe` directly so it is equally association-independent.
+
+---
+
+## Windows launcher checks Ollama service, not just binary presence
+
+**Decision:** `Resume Tailor.vbs` runs `ollama list` after confirming the Ollama binary exists. If the service is not responding, it attempts to auto-start Ollama and retries after a 4-second wait. It shows a dialog and aborts if the service still does not respond.
+
+**Rationale:** The original check (`where ollama`) only confirmed the binary was on PATH. It did not confirm the service was running. `ollama.list()` is called at module level in `resume.py` with no try/except — if the Ollama HTTP service is down when Python imports the module, the process crashes immediately before any window appears, silently. Confirming the service is live in the launcher before launching Python prevents this failure mode entirely without touching `resume.py` (which would require rebuilding the macOS DMG).
+
+---
+
+## Windows launcher runs pip install in a visible window
+
+**Decision:** `Resume Tailor.vbs` runs pip install with window style `1` (visible) and a `title` command, rather than style `0` (hidden).
+
+**Rationale:** On first launch and after updates, pip install can take 30–120 seconds. With a hidden window the user sees nothing after clicking the shortcut and reasonably concludes the app failed to start. The visible window with a friendly title ("Resume Tailor -- Installing dependencies…") provides feedback that something is happening and prevents repeated launch attempts.
+
+---
+
+## Windows launcher runs Python synchronously and logs output to a file
+
+**Decision:** `Resume Tailor.vbs` launches `python src\resume.py` via `cmd /c python ... > launch_error.log 2>&1` with `bWaitOnReturn = True`. If Python exits non-zero, the VBScript reads the log and shows the traceback in an error dialog.
+
+**Rationale:** The original fire-and-forget launch (`bWaitOnReturn = False`, hidden window) gave no mechanism to detect or report Python startup failures. Webview crashes, import errors, and Gradio port conflicts all produced identical results: nothing. Making the launch synchronous lets the VBScript check the exit code. Redirecting stdout and stderr to `launch_error.log` captures the traceback so both the error dialog and the log file give the user (or developer) actionable information about the failure.
+
+---
+
 ## Inputs above outputs in the layout
 
 **Decision:** All input fields (PDF, model, title, industry, job description, specifications) appear above the output fields (Resume Output, Insights & Answers).
